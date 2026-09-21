@@ -5,13 +5,18 @@ const $ = id => document.getElementById(id);
 const PALETTE = ['#4fc3f7', '#ffb74d', '#aed581', '#f06292', '#ba68c8',
                  '#4db6ac', '#fff176', '#ff8a65', '#90a4ae', '#e57373'];
 const ALT_H = 330;        // 高度曲线区高度(px)
-const GANTT_TOP = 348;    // 甘特条区顶部
+const GANTT_TOP = 348;    // 计划甘特条区顶部
 const GANTT_H = 48;
-const CHART_H = 440;
+const ACT_TOP = 412;      // 实际执行条区顶部
+const ACT_H = 48;
+const CHART_H = 500;
 
 let targets = [];                       // {name, ra, dec, expMin}
 let horizon = new Array(72).fill(0);    // 每 5° 方位一个遮挡角
 let planData = null;                    // /api/plan 返回
+let lastPlanBody = null;                // 最近一次规划请求（执行记录提交时复用）
+let obsForms = {};                      // index -> {status, start, end} 录入中的表单值
+let obsResult = null;                   // /api/observations 返回 {night, items, summary}
 let selected = -1;                      // 当前选中目标下标
 const view = { start: 0, end: 1 };      // 时间轴可视范围(ms)
 
@@ -20,13 +25,43 @@ function esc(s) {
   return String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 }
 function lonHours() { return (parseFloat($('lon').value) || 0) / 15; }
+function lonOffsetMs() { return lonHours() * 3600000; }
 /** 以地方平时（UTC + 经度/15）格式化时刻 */
 function fmtTime(ms) {
-  const d = new Date(ms + lonHours() * 3600000);
+  const d = new Date(ms + lonOffsetMs());
   return String(d.getUTCHours()).padStart(2, '0') + ':' + String(d.getUTCMinutes()).padStart(2, '0');
 }
 function fmtDur(ms) { return Math.round(ms / 60000) + ' 分'; }
 function color(i) { return PALETTE[i % PALETTE.length]; }
+
+/* datetime-local（地方平时）与 UTC 毫秒互转 */
+function msToLocalInput(ms) {
+  if (ms == null || !Number.isFinite(ms)) return '';
+  const d = new Date(ms + lonOffsetMs());
+  const p = n => String(n).padStart(2, '0');
+  return `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())}T${p(d.getUTCHours())}:${p(d.getUTCMinutes())}`;
+}
+function localInputToMs(v) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(String(v || ''));
+  if (!m) return NaN;
+  return Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5]) - lonOffsetMs();
+}
+function fmtDev(min) {
+  if (min == null) return '—';
+  const v = Math.round(min * 10) / 10;
+  const cls = v > 0 ? 'dev-pos' : (v < 0 ? 'dev-neg' : 'dev-zero');
+  const sign = v > 0 ? '+' : '';
+  return `<span class="${cls}">${sign}${v} 分</span>`;
+}
+function obsItemOf(index) {
+  return obsResult && obsResult.items.find(it => it.index === index) || null;
+}
+/** 计划顺序：已排目标按计划序，未排目标附后 */
+function orderedIndices() {
+  const ord = planData.plan.map(p => p.index);
+  planData.targets.forEach((t, i) => { if (!ord.includes(i)) ord.push(i); });
+  return ord;
+}
 
 /* ================= 地平线编辑器 ================= */
 const hcv = $('horizon');
@@ -173,10 +208,15 @@ $('planBtn').addEventListener('click', async () => {
     const data = await r.json();
     if (!r.ok) throw new Error(data.error || '计算失败');
     planData = data;
+    lastPlanBody = body;
+    obsForms = {};
+    obsResult = null;
     selected = -1;
     view.start = data.night.start - 30 * 60000;
     view.end = data.night.end + 30 * 60000;
     $('results').hidden = false;
+    $('obsSummary').hidden = true;
+    $('obsStatus').textContent = '';
     const off = lonHours();
     $('nightInfo').textContent =
       `${data.night.label}：${fmtTime(data.night.start)} → ${fmtTime(data.night.end)}` +
@@ -194,6 +234,8 @@ function renderAll() {
   renderLegend();
   renderDetail();
   renderPlanTables();
+  renderObsTable();
+  renderObsSummary();
 }
 
 /* ================= 时间轴 ================= */
@@ -223,9 +265,10 @@ function renderTimeline() {
   const x = t => (t - view.start) / (view.end - view.start) * W;
   const y = a => ALT_H - ((a + 10) / 100) * ALT_H; // 显示 -10°..90°
 
-  // 甘特区背景
+  // 甘特区背景（计划 + 实际两条泳道）
   ctx.fillStyle = 'rgba(255,255,255,0.03)';
-  ctx.fillRect(0, GANTT_TOP - 6, W, GANTT_H + 12);
+  ctx.fillRect(0, GANTT_TOP - 6, W, GANTT_H + 8);
+  ctx.fillRect(0, ACT_TOP - 6, W, ACT_H + 12);
 
   // 高度网格
   ctx.font = '11px sans-serif';
@@ -303,6 +346,32 @@ function renderTimeline() {
     }
   });
 
+  // 实际执行区间沿高度曲线叠加：窗内绿色，超出窗口红色
+  if (obsResult) {
+    obsResult.items.forEach(it => {
+      if (it.actualStart == null) return;
+      const tg = planData.targets[it.index];
+      const bad = it.outOfWindow;
+      drawSpan(tg.curve, it.actualStart, it.actualEnd, 3.5, 0.95, bad ? '#ef5350' : '#66bb6a');
+      if (bad) {
+        // 逐分钟找出落在窗口外的片段，在曲线上描红粗段
+        const inWin = t => tg.windows.some(w => t >= w.start && t <= w.end);
+        let runS = null, prevT = null, prevIn = null;
+        const c = tg.curve;
+        for (let ms = it.actualStart; ms <= it.actualEnd; ms += 60000) {
+          const inside = inWin(ms);
+          if (runS === null) { runS = ms; prevIn = inside; }
+          else if (inside !== prevIn) {
+            if (!prevIn) drawSpan(c, runS, prevT, 8, 0.9, '#ef5350');
+            runS = ms; prevIn = inside;
+          }
+          prevT = ms;
+        }
+        if (runS !== null && !prevIn) drawSpan(c, runS, it.actualEnd, 8, 0.9, '#ef5350');
+      }
+    });
+  }
+
   // 子午线翻转点 ◆
   planData.targets.forEach((tg, i) => {
     if (tg.flipTime == null) return;
@@ -322,7 +391,7 @@ function renderTimeline() {
     }
   });
 
-  // 甘特条（含转台/换向的灰色前置段）
+  // 计划甘特条（含转台/换向的灰色前置段）
   const gy = GANTT_TOP + 8, gh = GANTT_H - 16;
   planData.plan.forEach(p => {
     const col = color(p.index);
@@ -354,7 +423,71 @@ function renderTimeline() {
 
   // 图例
   ctx.fillStyle = '#5f6f92';
-  ctx.fillText('观测序列（灰段 = 转台/换向）', 6, GANTT_TOP - 10);
+  ctx.fillText('计划序列（灰段 = 转台/换向）', 6, GANTT_TOP - 10);
+
+  // 实际执行甘特条：窗内实色，窗口外部分红色，跳过以虚框 + ⏭ 标记
+  const ay = ACT_TOP + 8, ah = ACT_H - 16;
+  if (obsResult) {
+    obsResult.items.forEach(it => {
+      const col = color(it.index);
+      if (it.status === 'skipped') {
+        const tg = planData.targets[it.index];
+        if (tg.scheduled) {
+          const px0 = x(tg.scheduled.start), px1 = x(tg.scheduled.end);
+          it._ax0 = px0; it._ax1 = px1;
+          ctx.strokeStyle = 'rgba(180,190,210,0.7)';
+          ctx.setLineDash([4, 3]);
+          ctx.strokeRect(px0, ay, Math.max(2, px1 - px0), ah);
+          ctx.setLineDash([]);
+          ctx.fillStyle = '#b0bec5';
+          ctx.fillText('⏭ 跳过', px0 + 4, ay + ah / 2 + 4);
+        }
+        return;
+      }
+      const x0 = x(it.actualStart), x1 = x(it.actualEnd);
+      it._ax0 = x0; it._ax1 = x1;
+      // 底色条
+      ctx.fillStyle = it.status === 'partial' ? 'rgba(255,183,77,0.75)' : col;
+      roundRectPath(ctx, x0, ay, Math.max(2, x1 - x0), ah, 4);
+      ctx.fill();
+      // 窗口外的子区间描红
+      if (it.outOfWindow) {
+        const tg = planData.targets[it.index];
+        ctx.fillStyle = 'rgba(229,83,80,0.85)';
+        const markOutside = (a, b) => {
+          const xa = x(a), xb = x(b);
+          if (xb - xa > 0.5) ctx.fillRect(xa, ay, Math.max(1.5, xb - xa), ah);
+        };
+        let cur = it.actualStart;
+        const segs = tg.windows.filter(w => w.end > it.actualStart && w.start < it.actualEnd)
+          .sort((a, b2) => a.start - b2.start);
+        for (const w of segs) {
+          if (w.start > cur) markOutside(cur, Math.min(w.start, it.actualEnd));
+          cur = Math.max(cur, Math.min(w.end, it.actualEnd));
+        }
+        if (cur < it.actualEnd) markOutside(cur, it.actualEnd);
+      }
+      if (it.underexposed) {
+        ctx.strokeStyle = '#ffb74d';
+        ctx.lineWidth = 2;
+        roundRectPath(ctx, x0, ay, Math.max(2, x1 - x0), ah, 4);
+        ctx.stroke();
+      }
+      if (selected === it.index) {
+        ctx.strokeStyle = '#fff';
+        ctx.lineWidth = 2;
+        roundRectPath(ctx, x0, ay, Math.max(2, x1 - x0), ah, 4);
+        ctx.stroke();
+      }
+      ctx.fillStyle = '#0b1020';
+      ctx.font = '11px sans-serif';
+      const glyph = it.status === 'partial' ? '◐' : '●';
+      ctx.fillText(glyph, Math.max(2, x0 - 12), ay + ah / 2 + 4);
+      ctx.font = '11px sans-serif';
+    });
+  }
+  ctx.fillStyle = '#5f6f92';
+  ctx.fillText('实际执行（绿=窗内 · 红=窗口外 · ◐部分 · ⏭跳过 · 橙框=曝光不足）', 6, ACT_TOP - 10);
 }
 
 /* ---- 时间轴交互：拖动平移 / 滚轮缩放 / 点击选中 ---- */
@@ -378,9 +511,15 @@ tlc.addEventListener('pointerup', e => {
   if (drag && !drag.moved && planData) {
     const r = tlc.getBoundingClientRect();
     const my = e.clientY - r.top, mx = e.clientX - r.left;
-    if (my > GANTT_TOP - 6) {
+    if (my >= GANTT_TOP - 6 && my < GANTT_TOP + GANTT_H + 4) {
       for (const p of planData.plan) {
         if (mx >= (p._x0 ?? 0) - 2 && mx <= (p._x1 ?? 0) + 2) { selectTarget(p.index); break; }
+      }
+    } else if (obsResult && my >= ACT_TOP - 6 && my < ACT_TOP + ACT_H + 6) {
+      for (const it of obsResult.items) {
+        if (it._ax0 != null && mx >= it._ax0 - 2 && mx <= (it._ax1 ?? it._ax0) + 2) {
+          selectTarget(it.index); break;
+        }
       }
     }
   }
@@ -406,8 +545,11 @@ function renderLegend() {
   planData.targets.forEach((tg, i) => {
     const chip = document.createElement('button');
     chip.className = 'chip' + (selected === i ? ' sel' : '');
-    chip.innerHTML = `<span class="sw" style="background:${color(i)}"></span>${esc(tg.name)}${tg.scheduled ? '' : ' ⚠'}`;
-    chip.title = tg.scheduled ? '已排入' : tg.reason;
+    const it = obsItemOf(i);
+    let mark = tg.scheduled ? '' : ' ⚠';
+    if (it) mark = it.status === 'skipped' ? ' ⏭' : (it.outOfWindow ? ' 🔴' : ' ✅');
+    chip.innerHTML = `<span class="sw" style="background:${color(i)}"></span>${esc(tg.name)}${mark}`;
+    chip.title = it && it.outOfWindow ? `窗口外 ${it.outsideMin} 分钟` : (tg.scheduled ? '已排入' : tg.reason);
     chip.addEventListener('click', () => selectTarget(i));
     el.appendChild(chip);
   });
@@ -450,8 +592,24 @@ function renderDetail() {
     html += '<p>夜间无满足高度条件的窗口。</p>';
   }
   html += tg.scheduled
-    ? `<p class="ok">✅ 已排入：${fmtTime(tg.scheduled.start)} – ${fmtTime(tg.scheduled.end)}（${tg.scheduled.side === 'E' ? '东升侧' : '西落侧'}）</p>`
+    ? `<p class="ok">✅ 计划排入：${fmtTime(tg.scheduled.start)} – ${fmtTime(tg.scheduled.end)}（${tg.scheduled.side === 'E' ? '东升侧' : '西落侧'}）</p>`
     : `<p class="bad">❌ 未排入：${esc(tg.reason)}</p>`;
+
+  const it = obsItemOf(selected);
+  if (it) {
+    html += '<p>📝 执行记录：';
+    if (it.status === 'skipped') {
+      html += `<b>${it.statusLabel}</b>（已跳过）</p>`;
+    } else {
+      html += `<b>${it.statusLabel}</b> · 实际 ${fmtTime(it.actualStart)} – ${fmtTime(it.actualEnd)}` +
+              `（${it.actualMin} 分钟） · 开始偏差 ${fmtDev(it.startDevMin)} · 结束偏差 ${fmtDev(it.endDevMin)}</p>`;
+      const flags = [];
+      if (it.outOfWindow) flags.push(`<span class="badge out">超出可见窗口 ${it.outsideMin} 分钟</span>`);
+      if (it.underexposed) flags.push(`<span class="badge under">曝光不足（计划 ${it.plannedExpMin} 分钟）</span>`);
+      if (!flags.length) flags.push('<span class="badge ok">窗口内且曝光达标</span>');
+      html += '<p>' + flags.join('') + '</p>';
+    }
+  }
   el.innerHTML = html;
 }
 
@@ -489,6 +647,153 @@ function renderPlanTables() {
     });
   }
 }
+
+/* ================= 执行记录录入 / 偏差分析 ================= */
+function ensureForm(index) {
+  if (!obsForms[index]) obsForms[index] = { status: 'completed', start: '', end: '' };
+  return obsForms[index];
+}
+
+function renderObsTable() {
+  const tb = $('obsTable').querySelector('tbody');
+  tb.innerHTML = '';
+  let seq = 0;
+  orderedIndices().forEach(index => {
+    const tg = planData.targets[index];
+    const f = ensureForm(index);
+    const it = obsItemOf(index);
+    const tr = document.createElement('tr');
+    if (it && it.outOfWindow) tr.className = 'row-bad';
+    else if (it && it.underexposed) tr.className = 'row-warn';
+
+    const seqCell = tg.scheduled ? ++seq : '—';
+    const statusOpts = [['completed', '完成'], ['partial', '部分完成'], ['skipped', '跳过']]
+      .map(([v, l]) => `<option value="${v}"${f.status === v ? ' selected' : ''}>${l}</option>`).join('');
+    const liveMs = (() => {
+      const s = localInputToMs(f.start), e = localInputToMs(f.end);
+      return Number.isFinite(s) && Number.isFinite(e) && e > s ? Math.round((e - s) / 60000) : null;
+    })();
+    const actualMin = it ? it.actualMin : liveMs;
+    const disabled = f.status === 'skipped' ? ' disabled' : '';
+
+    const flags = [];
+    if (it) {
+      if (it.status === 'skipped') flags.push('<span class="badge under">已跳过</span>');
+      else {
+        if (it.outOfWindow) flags.push(`<span class="badge out">窗口外 ${it.outsideMin} 分</span>`);
+        if (it.underexposed) flags.push(`<span class="badge under">曝光不足</span>`);
+        if (!it.plannedStart) flags.push('<span class="badge under">计划外目标</span>');
+        if (!flags.length) flags.push('<span class="badge ok">达标</span>');
+      }
+    }
+
+    tr.innerHTML =
+      `<td>${seqCell}</td>` +
+      `<td class="tname"><span class="sw" style="background:${color(index)}"></span>${esc(tg.name)}</td>` +
+      `<td><select data-k="status" data-i="${index}">${statusOpts}</select></td>` +
+      `<td><input type="datetime-local" step="60" data-k="start" data-i="${index}" value="${esc(f.start)}"${disabled}></td>` +
+      `<td><input type="datetime-local" step="60" data-k="end" data-i="${index}" value="${esc(f.end)}"${disabled}></td>` +
+      `<td class="livemin">${actualMin != null ? actualMin + ' 分' : '—'}</td>` +
+      `<td>${it ? fmtDev(it.startDevMin) : '—'}</td>` +
+      `<td>${it ? fmtDev(it.endDevMin) : '—'}</td>` +
+      `<td>${flags.join('') || '<span class="hint">未提交</span>'}</td>`;
+    tr.querySelector('.tname').addEventListener('click', () => selectTarget(index));
+    tr.querySelectorAll('input,select').forEach(el => {
+      el.addEventListener('input', () => {
+        obsForms[el.dataset.i][el.dataset.k] = el.value;
+        if (el.dataset.k === 'status') { renderObsTable(); return; } // 切换跳过需禁用时间框
+        if (!it) { // 未提交记录时在时长列实时预览
+          const s = localInputToMs(f.start), e = localInputToMs(f.end);
+          tr.querySelector('.livemin').textContent =
+            Number.isFinite(s) && Number.isFinite(e) && e > s ? Math.round((e - s) / 60000) + ' 分' : '—';
+        }
+      });
+    });
+    tb.appendChild(tr);
+  });
+}
+
+function renderObsSummary() {
+  const el = $('obsSummary');
+  if (!obsResult) { el.hidden = true; el.innerHTML = ''; return; }
+  const s = obsResult.summary;
+  const pct = (s.completionRate * 100).toFixed(0);
+  const bad = s.outOfWindowCount + s.underexposedCount;
+  el.innerHTML =
+    `<span class="stat">完成率 <b>${pct}%</b>（完成 ${s.completed}/${s.totalTargets}${s.recorded ? `，已记录 ${s.recorded}` : ''}）</span>` +
+    `<span class="stat">部分完成 <b>${s.partial}</b> · 跳过 <b>${s.skipped}</b></span>` +
+    `<span class="stat${s.outOfWindowCount ? ' bad' : ''}">窗口外 <b>${s.outOfWindowCount}</b> 条</span>` +
+    `<span class="stat${s.underexposedCount ? ' warn' : ''}">曝光不足 <b>${s.underexposedCount}</b> 条</span>` +
+    `<span class="stat">实际总曝光 <b>${s.totalActualMin}</b> 分 / 计划 ${s.totalPlannedExpMin} 分</span>` +
+    `<span class="stat${bad ? ' warn' : ''}">总绝对偏差 <b>${s.totalAbsDevMin}</b> 分（开始 ${s.totalAbsStartDevMin} + 结束 ${s.totalAbsEndDevMin}）</span>`;
+  el.hidden = false;
+}
+
+$('fillPlanned').addEventListener('click', () => {
+  if (!planData) return;
+  planData.plan.forEach(p => {
+    const f = ensureForm(p.index);
+    f.status = 'completed';
+    f.start = msToLocalInput(p.start);
+    f.end = msToLocalInput(p.end);
+  });
+  renderObsTable();
+});
+
+$('clearObsForm').addEventListener('click', () => {
+  obsForms = {};
+  $('obsStatus').textContent = '';
+  renderObsTable();
+});
+
+$('submitObs').addEventListener('click', async () => {
+  if (!planData || !lastPlanBody) return;
+  const observations = [];
+  for (const index of orderedIndices()) {
+    const f = obsForms[index];
+    if (!f) continue;
+    const tg = planData.targets[index];
+    if (f.status === 'skipped') {
+      observations.push({ index, status: 'skipped' });
+      continue;
+    }
+    const empty = !f.start && !f.end;
+    if (empty) continue;
+    const s = localInputToMs(f.start), e = localInputToMs(f.end);
+    if (!Number.isFinite(s) || !Number.isFinite(e)) {
+      $('obsStatus').innerHTML = `<span class="bad">「${esc(tg.name)}」时间格式不完整</span>`;
+      return;
+    }
+    if (e <= s) {
+      $('obsStatus').innerHTML = `<span class="bad">「${esc(tg.name)}」结束时间需晚于开始时间</span>`;
+      return;
+    }
+    observations.push({ index, status: f.status, actualStart: s, actualEnd: e });
+  }
+  if (!observations.length) {
+    $('obsStatus').innerHTML = '<span class="warn">请先至少录入一条执行记录</span>';
+    return;
+  }
+  $('obsStatus').textContent = '提交中…';
+  try {
+    const r = await fetch('/api/observations', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...lastPlanBody, observations }),
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || '提交失败');
+    obsResult = data;
+    $('obsStatus').innerHTML = '<span class="ok">✅ 已保存（重复提交自动覆盖）</span>';
+    renderTimeline();
+    renderLegend();
+    renderDetail();
+    renderObsTable();
+    renderObsSummary();
+  } catch (e) {
+    $('obsStatus').innerHTML = '<span class="bad">错误：' + esc(e.message) + '</span>';
+  }
+});
 
 /* ================= 初始化 ================= */
 window.addEventListener('resize', () => { renderHorizon(); renderTimeline(); });

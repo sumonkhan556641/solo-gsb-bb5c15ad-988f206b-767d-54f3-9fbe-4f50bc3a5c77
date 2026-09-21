@@ -73,6 +73,26 @@
       <thead><tr><th>目标</th><th>原因</th></tr></thead>
       <tbody></tbody>
     </table>
+
+    <h3>执行记录与偏差分析</h3>
+    <p class="hint">
+      为每个目标录入实际开始/结束时间与状态后点击「提交执行记录」；同一目标重复提交将覆盖旧记录。
+      时间按地方平时（UTC+经度/15）填写。实际区间落在可见窗口外、或实际曝光短于计划时会标红。
+    </p>
+    <div class="row" style="margin: 6px 0">
+      <button id="fillPlanned" type="button">用计划时间填充已排目标</button>
+      <button id="submitObs" class="primary" type="button">提交执行记录</button>
+      <button id="clearObsForm" type="button">清空录入</button>
+      <span id="obsStatus" class="hint"></span>
+    </div>
+    <div id="obsSummary" class="obs-summary" hidden></div>
+    <table id="obsTable">
+      <thead><tr>
+        <th>计划序</th><th>目标</th><th>状态</th><th>实际开始</th><th>实际结束</th>
+        <th>实际(分)</th><th>开始偏差</th><th>结束偏差</th><th>判定</th>
+      </tr></thead>
+      <tbody></tbody>
+    </table>
   </section>
 </main>
 

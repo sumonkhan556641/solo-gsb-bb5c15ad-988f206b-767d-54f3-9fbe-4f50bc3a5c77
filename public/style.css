@@ -35,7 +35,7 @@ canvas#horizon {
   touch-action: none; cursor: crosshair; display: block;
 }
 canvas#timeline {
-  width: 100%; height: 440px; background: #0d1428; border-radius: 8px;
+  width: 100%; height: 500px; background: #0d1428; border-radius: 8px;
   touch-action: none; cursor: grab; display: block;
 }
 canvas#timeline:active { cursor: grabbing; }
@@ -57,6 +57,30 @@ tbody tr:hover { background: #16203a; }
 .detail ul { margin: 4px 0; padding-left: 20px; }
 .ok { color: #7fc97f; }
 .bad { color: #ff8a80; }
+.warn { color: #ffb74d; }
+tr.row-warn td { background: rgba(255, 183, 77, 0.08); }
+tr.row-bad td { background: rgba(229, 115, 115, 0.12); }
+.obs-summary { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0 4px; }
+.obs-summary .stat {
+  background: #0d1428; border: 1px solid #22304f; border-radius: 999px;
+  padding: 4px 14px; font-size: 12px;
+}
+.obs-summary .stat b { color: #dbe4f5; }
+.obs-summary .stat.bad b { color: #ff8a80; }
+.obs-summary .stat.warn b { color: #ffb74d; }
+.badge {
+  display: inline-block; border-radius: 4px; padding: 1px 7px; margin-right: 4px;
+  font-size: 11px; border: 1px solid;
+}
+.badge.out { color: #ff8a80; border-color: #a34949; background: rgba(229,115,115,0.12); }
+.badge.under { color: #ffb74d; border-color: #a07b3c; background: rgba(255,183,77,0.10); }
+.badge.ok { color: #7fc97f; border-color: #4d8f4d; background: rgba(127,201,127,0.10); }
+.dev-neg { color: #80cbc4; }
+.dev-pos { color: #ffab91; }
+.dev-zero { color: #8fa3c8; }
+#obsTable input, #obsTable select { padding: 4px 6px; font-size: 12px; }
+#obsTable input[type="time"] { width: 92px; }
+#obsTable select { width: 96px; }
 #status { color: #ffb74d; font-size: 13px; }
 .del { padding: 2px 8px; }
 #planTable tbody tr, #failTable tbody tr { cursor: pointer; }
