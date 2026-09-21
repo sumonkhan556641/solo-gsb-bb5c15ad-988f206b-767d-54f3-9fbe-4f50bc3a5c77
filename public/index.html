@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>望远镜夜间序列规划台</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1>🔭 望远镜夜间序列规划台</h1>
+  <p>按恒星时计算可见窗口 · 自动处理子午线翻转 / 窗口重叠 / 转台换向耗时</p>
+</header>
+
+<main>
+  <section class="panel">
+    <h2>观测设置</h2>
+    <div class="grid">
+      <label>纬度（°，北纬为正）<input id="lat" type="number" step="0.1" value="40"></label>
+      <label>经度（°，东经为正）<input id="lon" type="number" step="0.1" value="116"></label>
+      <label>日期<input id="date" type="date"></label>
+      <label>最低高度（°）<input id="minAlt" type="number" step="1" value="25" min="0" max="89"></label>
+      <label>转台耗时（分钟）<input id="slewMin" type="number" step="0.5" value="2" min="0"></label>
+      <label>换向耗时（分钟）<input id="flipMin" type="number" step="0.5" value="5" min="0"></label>
+    </div>
+
+    <h3>地平线遮挡角（拖动绘制；方位 0°=北 · 90°=东 · 180°=南 · 270°=西）</h3>
+    <canvas id="horizon" width="960" height="180"></canvas>
+    <div class="row">
+      <button data-preset="flat">平坦</button>
+      <button data-preset="trees">树林</button>
+      <button data-preset="hill">南侧山坡</button>
+      <button data-preset="dome">圆顶墙</button>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2>目标列表</h2>
+    <div class="row">
+      <input id="tName" placeholder="名称（可空）" class="grow">
+      <input id="tRa" placeholder="赤经，如 05:35:17 或 5.588" class="grow">
+      <input id="tDec" placeholder="赤纬，如 -05:23:28" class="grow">
+      <input id="tExp" type="number" placeholder="曝光(分)" value="30" min="1" style="width:96px">
+      <button id="addTarget">添加目标</button>
+      <button id="loadSamples">载入示例目标</button>
+      <button id="clearTargets">清空</button>
+    </div>
+    <table id="targetTable">
+      <thead><tr><th></th><th>名称</th><th>赤经</th><th>赤纬</th><th>曝光(分)</th><th></th></tr></thead>
+      <tbody></tbody>
+    </table>
+    <div class="row" style="margin-top:12px">
+      <button id="planBtn" class="primary">生成观测序列</button>
+      <span id="status"></span>
+    </div>
+  </section>
+
+  <section class="panel" id="results" hidden>
+    <h2>夜间时间轴 <small id="nightInfo" class="hint"></small></h2>
+    <p class="hint">拖动平移 · 滚轮缩放 · 点击图例 / 甘特条 / 表格行查看目标窗口与翻转点（◆）</p>
+    <canvas id="timeline"></canvas>
+    <div id="legend"></div>
+    <div id="detail" class="detail"></div>
+
+    <h3>观测顺序</h3>
+    <table id="planTable">
+      <thead><tr><th>#</th><th>目标</th><th>开始</th><th>结束</th><th>时长</th><th>子午线侧</th><th>前置耗时</th></tr></thead>
+      <tbody></tbody>
+    </table>
+
+    <h3>未能排入的目标</h3>
+    <table id="failTable">
+      <thead><tr><th>目标</th><th>原因</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </section>
+</main>
+
+<script src="app.js"></script>
+</body>
+</html>

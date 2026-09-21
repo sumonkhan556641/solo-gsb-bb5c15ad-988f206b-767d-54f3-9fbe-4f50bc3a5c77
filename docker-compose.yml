@@ -1,0 +1,7 @@
+services:
+  planner:
+    build: .
+    image: night-sequence-planner
+    ports:
+      - "3000:3000"
+    restart: unless-stopped

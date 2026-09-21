@@ -1,0 +1,16 @@
+{
+  "name": "night-sequence-planner",
+  "version": "1.0.0",
+  "private": true,
+  "description": "望远镜夜间序列规划台：恒星时可见窗口计算 + 子午线翻转感知的观测序列调度",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "express": "^4.19.2"
+  }
+}
