@@ -57,16 +57,29 @@
 
   <section class="panel" id="results" hidden>
     <h2>夜间时间轴 <small id="nightInfo" class="hint"></small></h2>
-    <p class="hint">拖动平移 · 滚轮缩放 · 点击图例 / 甘特条 / 表格行查看目标窗口与翻转点（◆）</p>
+    <p class="hint">拖动平移 · 滚轮缩放 · 点击图例 / 甘特条 / 表格行查看目标窗口与翻转点（◆）。甘特区上排为计划段，下排为实际段（红框 = 越窗部分，✕ = 跳过）。</p>
     <canvas id="timeline"></canvas>
     <div id="legend"></div>
     <div id="detail" class="detail"></div>
 
     <h3>观测顺序</h3>
     <table id="planTable">
-      <thead><tr><th>#</th><th>目标</th><th>开始</th><th>结束</th><th>时长</th><th>子午线侧</th><th>前置耗时</th></tr></thead>
+      <thead><tr><th>#</th><th>目标</th><th>计划开始</th><th>计划结束</th><th>时长</th><th>子午线侧</th><th>前置耗时</th></tr></thead>
       <tbody></tbody>
     </table>
+
+    <h3>执行记录与偏差分析 <small class="hint">为每个目标录入实际开始/结束（地方平时）；同一目标重复提交自动覆盖</small></h3>
+    <p class="hint">实际时间按观测夜跨日：≥12:00 为当天晚上、&lt;12:00 为次日凌晨。红色行 = 实际区间超出可见窗口，橙色 = 完成但曝光不足。</p>
+    <div id="execSummary" class="summary" hidden></div>
+    <div class="tablewrap">
+      <table id="obsTable">
+        <thead><tr>
+          <th>#</th><th>目标</th><th>状态</th><th>实际开始</th><th>实际结束</th>
+          <th>实际曝光(分)</th><th>开始偏差</th><th>结束偏差</th><th>越窗</th><th>判定</th><th></th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
 
     <h3>未能排入的目标</h3>
     <table id="failTable">
